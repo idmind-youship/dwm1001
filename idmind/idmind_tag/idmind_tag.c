@@ -11,9 +11,6 @@
 #include <logging/log.h>
 LOG_MODULE_REGISTER(main);
 
-#define DEV_ID 0x0001
-#define PAN_ID 0x6380
-
 /* Example application name and version to display on console. */
 #define APP_NAME "IDMind TAG TWR INIT v0.1"
 #define APP_AUTHOR "Carlos Neves"
@@ -35,14 +32,6 @@ static dwt_config_t config = {
                         Used in RX only. */           
 };
 
-/* Buffer to store received response message.
- * Its size is adjusted to longest frame that this example code is supposed 
- * to handle.
- */
-#define RX_BUF_LEN 20
-static uint8 rx_buffer[RX_BUF_LEN];
-
-#define PERIOD 500
 #define SPEED_OF_LIGHT 299702547
 
 /*! --------------------------------------------------------------------------
@@ -94,13 +83,13 @@ void print_header(void)
  * @param  none
  * @return 0 if success, error code otherwise
  */
-
 int start_dwm(void)
 {
-    printk("Starting DWM Communication with ");
+    printk("Starting DWM Communication\n");
     /* Open SPI to communicate with DWM1001 */
     openspi();
     /* Configure device */
+    reset_DW1000(); 
     port_set_dw1000_slowrate();
     if (dwt_initialise(DWT_LOADUCODE) == DWT_ERROR) {
         printk("INIT FAILED");
@@ -118,7 +107,6 @@ int start_dwm(void)
  * @param  none
  * @return 0 if success, error code otherwise
  */
-
 int config_dwm(void)
 {
     printk("Configuring DWM... ");
@@ -133,7 +121,7 @@ int config_dwm(void)
     dwt_settxantennadelay(RX_ANT_DLY);
 
     /* Set expected response's delay and timeout. */
-    dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
+    dwt_setrxaftertxdelay(TX_TO_RX_DELAY_UUS);
     dwt_setrxtimeout(RX_RESP_TIMEOUT_UUS);
 
     k_yield();
@@ -161,28 +149,38 @@ int dw_main(void)
     dwt_setinterrupt(DWT_INT_TFRS | DWT_INT_RFCG | DWT_INT_RFTO | 
                      DWT_INT_RXPTO | DWT_INT_RPHE | DWT_INT_RFCE | 
                      DWT_INT_RFSL | DWT_INT_SFDT, 1);
-    
-    /* Delay to start Rx after Tx */
-    dwt_setrxaftertxdelay(TX_TO_RX_DELAY_UUS);
-    /* Set response frame timeout. */
-    dwt_setrxtimeout(RX_RESP_TIMEOUT_UUS);
 
     /* Initialization of main loop */
     bool discovery = false;
-    int anchor_id = 1;
+    int anchor_id = -1;
     int seq_nr = 0;
-    uint32 dev_id = dwt_readdevid();
+    uint32 dev_id = -1;
+
+    // Preparation of messages
+    // Set device id on Blink message
+    for(int i = 0; i < 8; i++) blink_msg[2+i] = (DEV_ID >> 8*i) && 0xFF;  
+    // Set device ids on Poll and Final message
+    poll_msg[3] = PAN_ID & 0xFF;
+    poll_msg[4] = (PAN_ID >> 8) & 0xFF;
+    final_msg[3] = PAN_ID & 0xFF;
+    final_msg[4] = (PAN_ID >> 8) & 0xFF;
 
     while(1)
     {
+        printk("========================\n");
         if(!discovery){
-            discovery = (discovery_phase(&seq_nr, dev_id, &anchor_id)==0);
+            discovery = (discovery_phase(&seq_nr, &dev_id, &anchor_id)==0);
+            if (!discovery){
+                // Sleep between ranging attempts (consider putting UWB to sleep mode)
+                Sleep(RANGE_PERIOD);
+            }
         }
         else{
-            ranging_phase();
+            ranging_phase(&seq_nr, &dev_id, &anchor_id);
             discovery = false;
+            Sleep(RANGE_PERIOD);
         }
-        Sleep(PERIOD);
+        
     }
     return 0;
 }
