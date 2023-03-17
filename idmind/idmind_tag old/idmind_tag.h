@@ -11,8 +11,6 @@
 
 #define DEV_ID 0x0001
 #define PAN_ID 0x6380
-#define BIG_PERIOD 50
-#define PERIOD 10
 
 /* UWB microsecond (uus) to device time unit (dtu, around 15.65 ps) 
  * conversion factor.
@@ -21,17 +19,19 @@
 
 /* Delay Definitions */
 // Delay after Tx to start Rx scan (UWB microseconds)
-#define TX_TO_RX_DELAY_UUS 300
+#define TX_TO_RX_DELAY_UUS 60
 // Rx timeout (UWB microseconds)
-#define RX_RESP_TIMEOUT_UUS 10000
+#define RX_RESP_TIMEOUT_UUS 8000
 // TX and Rx Antenna delays
 #define TX_ANT_DLY 16436
 #define RX_ANT_DLY 16436
+// Delay between ranging attempts (miliseconds)
+#define RANGE_PERIOD 500
 
 /* Rx Buffer to be used in callbacks */
 #define FRAME_LEN_MAX 127
 static bool rx_received;
-// static uint8 rx_buffer[FRAME_LEN_MAX];
+static uint8 rx_buffer[FRAME_LEN_MAX];
 /* The frame sent in this example is an 802.15.4e standard blink. 
  * It is a 12-byte frame composed of the following fields:
  *     - byte 0: frame type (0xC5 for a blink).
@@ -39,11 +39,11 @@ static bool rx_received;
  *     - byte 2 -> 9: device ID.
  *     - byte 10/11: frame check-sum, automatically set by DW1000.
  */
-// static uint8 blink_msg[] = {0xC5, 0, 'D', 'E', 'C', 'A', 'W', 'A', 'V', 'E', 0, 0};
+static uint8 blink_msg[] = {0xC5, 0, 'D', 'E', 'C', 'A', 'W', 'A', 'V', 'E', 0, 0};
 
 /* 0x41 0x8C SEQ PANID_L PANID_H 2*DEST 2*SOURCE 0x61 FCS_L FCS_H*/
-// static uint8 poll_msg[] = {0x41, 0x88, 0x00, 0xCA, 0xDE, 0x00, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00};
-// static uint8 final_msg[] = {0x41, 0x88, 0x00, 0xCA, 0xDE, 0x00, 0x00, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+static uint8 poll_msg[] = {0x41, 0x88, 0x00, 0xCA, 0xDE, 0x00, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00};
+static uint8 final_msg[] = {0x41, 0x88, 0x00, 0xCA, 0xDE, 0x00, 0x00, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 /* idmind_tag_callbacks.c */
 void tx_done_cb(const dwt_cb_data_t *cb_data);
@@ -53,13 +53,9 @@ void rx_err_cb(const dwt_cb_data_t *cb_data);
 int rx_message(uint8* rx_buffer);
 
 /* idmind_tag_phases.c */
-// static uint64 tx_to_rx_delay;
-// static uint64 ranging_rx_ts;
-// static uint64 poll_tx_ts;
-void print_msg(char* msg, int size);
-uint64 get_tx_timestamp_u64(void);
-uint64 get_rx_timestamp_u64(void);
-void final_msg_get_ts(const uint8 *ts_field, uint32 *ts);
+static uint64 tx_to_rx_delay;
+static uint64 ranging_rx_ts;
+static uint64 poll_tx_ts;
 int discovery_phase(int* seq_nr, uint32* dev_id, int* anchor_id);
 int ranging_phase(int* seq_nr, uint32* dev_id, int* anchor_id);
 

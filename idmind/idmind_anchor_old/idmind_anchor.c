@@ -6,6 +6,9 @@
 
 #include "idmind_anchor.h"
 
+uint8 ranging_init[22];
+uint8 resp_msg[16];
+
 #define LOG_LEVEL 3
 #include <logging/log.h>
 LOG_MODULE_REGISTER(main);
@@ -102,7 +105,7 @@ int start_dwm(void)
     /* Configure device */
     reset_DW1000(); 
     port_set_dw1000_slowrate();
-    if (dwt_initialise(DWT_LOADUCODE) == DWT_ERROR) {
+    if (dwt_initialise(DWT_LOADNONE) == DWT_ERROR) {
     // if (dwt_initialise(DWT_LOADUCODE) == DWT_ERROR) {
         printk("INIT FAILED");
         k_sleep(K_MSEC(500)); // allow logging to run.
@@ -140,8 +143,8 @@ int config_dwm(void)
     dwt_settxantennadelay(RX_ANT_DLY);
 
     /* Set expected response's delay and timeout. */
-    dwt_setrxaftertxdelay(TX_TO_RX_DELAY_UUS);
-    dwt_setrxtimeout(RX_RESP_TIMEOUT_UUS);
+    // dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
+    // dwt_setrxtimeout(RX_RESP_TIMEOUT_UUS);
 
     k_yield();
     printk("Success!\n");
@@ -159,17 +162,16 @@ int dw_main(void)
     config_dwm();
 
     /* Initialization of main loop */
-    bool discovery = true;
-    // int seq_nr = 0;
-    uint64 dev_list[] = {0, 0, 0, 0, 0};
-    uint64 ranging_tx_ts = 0;
-    uint64 poll_rx_ts = 0;
-    double tof_dtu = 0;
+    bool discovery = false;
+    int seq_nr = 0;
+    uint32 dev_id = DEV_ID;
+    bool dev_list[MAX_DEVICES];
+    for(int i=0; i<MAX_DEVICES; i++) dev_list[i] = false;
+    flag_interrupt = false;
 
     /************************************************/
     /*          Setup Ranging Init Message          */
     /************************************************/
-    uint8 ranging_init[22];
     for(int i=0; i<22; i++) ranging_init[i] = 0;
     // Header
     ranging_init[0] = 0x41;
@@ -178,18 +180,17 @@ int dw_main(void)
     ranging_init[3] = PAN_ID & 0xFF;
     ranging_init[4] = (PAN_ID >> 8) & 0xFF;
     // Source address
-    ranging_init[13] = (DEV_ID) & 0xFF;
-    ranging_init[14] = (DEV_ID >> 8) & 0xFF;
+    ranging_init[13] = (dev_id) & 0xFF;
+    ranging_init[14] = (dev_id >> 8) & 0xFF;
     // Action code
     ranging_init[15] = 0x20;
     //Request a response delay
-    ranging_init[18] = (uint8)(POLL_RX_TO_RESP_TX_DLY_UUS & 0xFF);
-    ranging_init[19] = (uint8)((POLL_RX_TO_RESP_TX_DLY_UUS >> 8) & 0xFF);
+    ranging_init[18] = (int)(POLL_RX_TO_RESP_TX_DLY_UUS/1000) & 0xFF;
+    ranging_init[19] = ((int)(POLL_RX_TO_RESP_TX_DLY_UUS/1000) >> 8) & 0xFF;
 
     /*************************************************/
     /*          Setup Poll Response Message          */
     /*************************************************/
-    uint8 resp_msg[16];
     for(int i=0; i<16; i++) resp_msg[i] = 0;
     // Header
     resp_msg[0] = 0x41;
@@ -203,102 +204,21 @@ int dw_main(void)
     resp_msg[9] = 0x50;
 
     /* Loop forever receiving frames. */
-    int iter = 0;
-    uint64 tag_id = 0;
-    uint8 seq_nr = 0;
     while (1) {
-        iter++;
-        // printk("============ Iter %d =============\n", iter);
-
-        if(discovery){
-            tag_id = 0;
-            // Anchor waits for blink message
-            dwt_rxenable(DWT_START_RX_IMMEDIATE);
-            if (rx_message(rx_buffer) != 0){
-                // printk("Did not receive Blink message.\n");
-                Sleep(PERIOD);
-                continue;
-            }
-
-            // If message received is Blink, save TAG in dev list
-            if (rx_buffer[0] == 0xC5){
-                // HOW TO USE/SAVE SEQ NUMBER? OR JUST KEEP IN LIST AND WAIT FOR CONTACT AFTER?
-                
-                for(int i=0; i<8; i++) tag_id += (rx_buffer[2+i] << 8*i);
-                printk("Received Blink %u from Tag %llu\n", rx_buffer[1], tag_id);
-                seq_nr = rx_buffer[1];
-                for(int idx=0; idx<5; idx++){
-                    if(dev_list[idx]==0){
-                        dev_list[idx] = tag_id;
-                        printk("Tag %llu added to dev_list[%d].\n", tag_id, idx);
-                        break;
-                    }
-                    if(dev_list[idx] == tag_id){
-                        break;
-                    }
-                }
-            }
-            else{
-                printk("Expected a Blink message, received smothing else:\n");
-                print_msg(rx_buffer, dwt_read32bitreg(RX_FINFO_ID) & RX_FINFO_RXFL_MASK_1023);
-                Sleep(PERIOD);
-                continue;
-            } // end of blink handling
-
-            // THINK OF HOW TO SELECT NEXT DEVICE
-            int dev_idx = 0;
-            uint16 short_tag_id = dev_idx+1;
-
-            // Send ranging_init message
-            ranging_init[2] = seq_nr;
-            for(int idx=0; idx<8; idx++) ranging_init[5+idx] = (dev_list[dev_idx] >> 8*idx) & 0xFF;
-            for(int idx=0; idx<2; idx++) ranging_init[16+idx] = (short_tag_id >> 8*idx) & 0xFF;
-            dwt_writetxdata(22, ranging_init, 0);
-            dwt_writetxfctrl(22, 0, 0);
-            printk("Sending Ranging init.\n");
-            // print_msg(ranging_init, 22);
-            if (dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED) == DWT_ERROR){
-                printk("Error sending Ranging Init to Tag %llu.\n", dev_list[dev_idx]);
-                Sleep(PERIOD);
-                continue;
-            }
-            else{
-                ranging_tx_ts = get_tx_timestamp_u64();
-                printk("Waiting for Poll Message.\n");
-                discovery = false;
-                Sleep(PERIOD);
-            }
-        }
+        printk("=========================\n");
+        
         if(!discovery){
-            // Anchor waits for Poll message
-            dwt_rxenable(DWT_START_RX_IMMEDIATE);
-            if (rx_message(rx_buffer) != 0){
-                printk("Did not receive Poll message.\n");
-                discovery = true;
-                Sleep(PERIOD);
-                continue;
+            discovery = (discovery_phase(&seq_nr, dev_id, dev_list, ranging_init)==0);
+            if(!discovery){
+                // Sleep between ranging attempts (consider putting UWB to sleep mode)
+                Sleep(RANGE_PERIOD);
             }
-            // If message received is Poll, calculate ToF
-            if ((rx_buffer[0] == 0x41) & (rx_buffer[1] == 0x88) & (rx_buffer[9] == 0x61)){
-                poll_rx_ts = get_rx_timestamp_u64();
-                // ToF is calculated in DWT time units
-                tof_dtu = (poll_rx_ts-ranging_tx_ts-(uint64)(POLL_RX_TO_RESP_TX_DLY_UUS*UUS_TO_DWT_TIME)-TX_ANT_DLY-RX_ANT_DLY)/2;
-                /* 1 uus = 512 / 499.2 usec and 1 usec = 499.2 * 128 dtu. */
-                double tof_us = tof_dtu/(499.2*128);
-                printk("TxR: %llu | RxP: %llu | ToF: %fs\n", ranging_tx_ts, poll_rx_ts, (double)tof_us/1000000.0);
-                printk("Estimated Distance: %fm\n", ((double)tof_us/1000000.0)*SPEED_OF_LIGHT);
-                discovery = true;
-                Sleep(PERIOD);
-            }
-            else{
-                printk("Expected a Poll message, received smothing else:\n");
-                print_msg(rx_buffer, dwt_read32bitreg(RX_FINFO_ID) & RX_FINFO_RXFL_MASK_1023);
-                discovery = true;
-                Sleep(PERIOD);
-            } // end of Poll handling
         }
-        Sleep(PERIOD);
+        else{
+            ranging_phase(&seq_nr, dev_id, dev_list);
+            discovery = false;
+            Sleep(RANGE_PERIOD);
+        }
 
     }
-    return 0;
 }

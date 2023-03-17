@@ -54,15 +54,15 @@ int rx_message(uint8* rx_buffer){
     uint32 status_reg = 0;
 
     rx_received = false;
-    dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    // dwt_rxenable(DWT_START_RX_IMMEDIATE);
     while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG | SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR))){}
     if (status_reg & SYS_STATUS_ALL_RX_TO){
-        printk("Timeout waiting for message\n");
+        // printk("Timeout waiting for message\n");
         dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_TO);
         return -1;
     }
     else if (status_reg & SYS_STATUS_ALL_RX_ERR){
-        printk("Error receiving message\n");
+        // printk("Error receiving message\n");
         dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
         return -1;
     }

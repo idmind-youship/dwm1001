@@ -7,8 +7,6 @@
 
 #include "idmind_tag.h"
 
-static uint8 rx_buffer[FRAME_LEN_MAX];
-
 #define LOG_LEVEL 3
 #include <logging/log.h>
 LOG_MODULE_REGISTER(main);
@@ -145,130 +143,44 @@ int dw_main(void)
     start_dwm();
     /* Configure DWM */
     config_dwm();
+    /* Set callbacks for TxDone, Rx OK, Rx Timeout, Rx Err */
+    dwt_setcallbacks(tx_done_cb, NULL, NULL, NULL);
+
+    dwt_setinterrupt(DWT_INT_TFRS | DWT_INT_RFCG | DWT_INT_RFTO | 
+                     DWT_INT_RXPTO | DWT_INT_RPHE | DWT_INT_RFCE | 
+                     DWT_INT_RFSL | DWT_INT_SFDT, 1);
 
     /* Initialization of main loop */
-    bool discovery = true;
+    bool discovery = false;
+    int anchor_id = -1;
     int seq_nr = 0;
+    uint32 dev_id = -1;
 
     // Preparation of messages
-    uint16 anchor_id = 0;
-    uint16 tag_short_id = 0;
-    uint64 resp_delay = 0;
-    uint64 rx_ranging_init_ts = 0;
-    uint64 tx_poll_ts = 0;
-
-    /*****************************************/
-    /*          Setup Blink Message          */
-    /*****************************************/
-    uint8 blink_msg[12];
-    for(int i=0; i<12; i++) blink_msg[i] = 0;
-    // Header
-    blink_msg[0] = 0xC5;
     // Set device id on Blink message
     for(int i = 0; i < 8; i++) blink_msg[2+i] = (DEV_ID >> 8*i) && 0xFF;  
-    /*****************************************/
-    /*          Setup Poll Message          */
-    /*****************************************/
-    uint8 poll_msg[12];
-    for(int i=0; i<12; i++) poll_msg[i] = 0;
-    // Header
-    poll_msg[0] = 0x41;
-    poll_msg[1] = 0x88;
-    // Network
+    // Set device ids on Poll and Final message
     poll_msg[3] = PAN_ID & 0xFF;
     poll_msg[4] = (PAN_ID >> 8) & 0xFF;
-    // Destination address is set in real time.
-    // Short Source address is set on real time
-    poll_msg[9] = 0x61;
-
-    /*****************************************/
-    /*          Setup Final Message          */
-    /*****************************************/
-    uint8 final_msg[20];
-    for(int i=0; i<12; i++) final_msg[i] = 0;
-    // Header
-    final_msg[0] = 0x41;
-    final_msg[1] = 0x88;
-    // Network
     final_msg[3] = PAN_ID & 0xFF;
     final_msg[4] = (PAN_ID >> 8) & 0xFF;
-    // Destination address is set in real time.
-    // Short Source address is set on real time
-    final_msg[9] = 0x69;
 
-    int iter = 0;
-    uint16 frame_len = 0;
-    uint32 status_reg = 0;
     while(1)
     {
-        iter++;
-        printk("============ Iter %d =============\n", iter);
-
-        /*************************************/
-        /*          DISCOVERY PHASE          */
-        /*************************************/
-        if(discovery){
-            // Send Blink Message
-            seq_nr++;
-            blink_msg[1] = seq_nr;
-
-            dwt_writetxdata(12, blink_msg, 0);
-            dwt_writetxfctrl(12, 0, 0); 
-            printk("Sending Blink: ");
-            print_msg(blink_msg, 12);
-            if (dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED) == DWT_ERROR){
-                printk("Error sending Blink");
-                Sleep(BIG_PERIOD);
-                continue;
-            }
-
-            if (rx_message(rx_buffer) != 0){
-                printk("Did not receive Ranging Init message.\n");
-                Sleep(BIG_PERIOD);
-                continue;
-            }
-            // If message received is Ranging Init, prepare for Ranging Phase
-            if ((rx_buffer[0] == 0x41) & (rx_buffer[1] == 0x8C) & (rx_buffer[15] == 0x20)){
-                print_msg(rx_buffer, 22);
-                anchor_id = rx_buffer[13]+(rx_buffer[14]<<8);
-                tag_short_id = rx_buffer[16]+(rx_buffer[17]<<8);
-                resp_delay = (rx_buffer[18]+(rx_buffer[19]<<8)); // UWB microseconds
-                rx_ranging_init_ts = get_rx_timestamp_u64();
-                printk("Received a Ranging Init from Anchor %u, set id to %u and delay to %llumicros\n", anchor_id, tag_short_id, resp_delay);
-                discovery = false;
-            }
-            else{
-                printk("Expected a Ranging Init, received smothing else:\n");
-                print_msg(rx_buffer, dwt_read32bitreg(RX_FINFO_ID) & RX_FINFO_RXFL_MASK_1023);
-            } // end of ranging init handling
-        }
-
+        printk("========================\n");
         if(!discovery){
-            /*************************************/
-            /*           RANGING PHASE           */
-            /*************************************/
-            // Tag sends a Poll mesage, delayed by resp_delay
-            poll_msg[2] = seq_nr;
-            for(int i=0; i<2; i++) poll_msg[5+i] = (anchor_id >> 8*i) & 0xFF;
-            for(int i=0; i<2; i++) poll_msg[7+i] = (tag_short_id >> 8*i) & 0xFF;
-            tx_poll_ts = (rx_ranging_init_ts + (UUS_TO_DWT_TIME*resp_delay));
-            printk("RxR: %llu | Delay: %llu | TxP: %lu\n", rx_ranging_init_ts, (UUS_TO_DWT_TIME*resp_delay), tx_poll_ts);
-            dwt_setdelayedtrxtime((uint32)(tx_poll_ts>>8));
-            dwt_writetxdata(12, poll_msg, 0);
-            dwt_writetxfctrl(12, 0, 0); 
-            // printk("Sending Poll: ");
-            // print_msg(poll_msg, 12);
-            if (dwt_starttx(DWT_START_TX_DELAYED | DWT_RESPONSE_EXPECTED) == DWT_ERROR){
-                printk("Error sending Poll Message.\n");
-                discovery = true;
-                Sleep(PERIOD);
-                continue;
+            discovery = (discovery_phase(&seq_nr, &dev_id, &anchor_id)==0);
+            if (!discovery){
+                // Sleep between ranging attempts (consider putting UWB to sleep mode)
+                Sleep(RANGE_PERIOD);
             }
-            
         }
-        discovery = true;
-        Sleep(PERIOD);
-
+        else{
+            ranging_phase(&seq_nr, &dev_id, &anchor_id);
+            discovery = false;
+            Sleep(RANGE_PERIOD);
+        }
+        
     }
     return 0;
 }

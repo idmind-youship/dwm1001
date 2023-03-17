@@ -22,7 +22,7 @@ int rx_message(uint8* rx_buffer){
     uint32 status_reg = 0;
 
     rx_received = false;
-    // dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    dwt_rxenable(DWT_START_RX_IMMEDIATE);
     while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG | SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR))){}
     if (status_reg & SYS_STATUS_ALL_RX_TO){
         printk("Timeout waiting for message\n");
@@ -40,6 +40,7 @@ int rx_message(uint8* rx_buffer){
             rx_buffer[i] = 0;
         }
         frame_len = dwt_read32bitreg(RX_FINFO_ID) & RX_FINFO_RXFL_MASK_1023;
+        printk("Received message with %d frame len.", frame_len);
         if (frame_len <= FRAME_LEN_MAX) {
             dwt_readrxdata(rx_buffer, frame_len, 0);
         }
